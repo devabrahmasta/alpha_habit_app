@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -17,11 +18,14 @@ class OnboardingScreen extends ConsumerStatefulWidget {
 
 class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   int _page = 0;
+  int _totalDays = 90;
   bool _loading = false;
 
-  Future<void> _startChallenge() {
-    setState(() => _page = 1);
-    return Future.value();
+  void _startChallenge(int totalDays) {
+    setState(() {
+      _totalDays = totalDays;
+      _page = 1;
+    });
   }
 
   Future<void> _signIn() async {
@@ -29,10 +33,11 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     try {
       final user = await ref.read(authServiceProvider).signInWithGoogle();
 
-      // Save target
-      await ref.read(targetRepoProvider).createTarget(
+      // Save target with user-chosen totalDays
+      await ref.read(targetRepoProvider).createOrUpdateTarget(
             TargetModel(
               userId: user.uid,
+              totalDays: _totalDays,
               startDate: DateTime.now(),
             ),
           );
@@ -84,9 +89,42 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   }
 }
 
-class _PageOne extends StatelessWidget {
+// ──────────────────────────────────────────────
+//  PAGE ONE — Editable day picker (1–999)
+// ──────────────────────────────────────────────
+
+class _PageOne extends StatefulWidget {
   const _PageOne({super.key, required this.onNext});
-  final VoidCallback onNext;
+  final ValueChanged<int> onNext;
+
+  @override
+  State<_PageOne> createState() => _PageOneState();
+}
+
+class _PageOneState extends State<_PageOne> {
+  late final TextEditingController _daysCtrl;
+  int _days = 90;
+
+  @override
+  void initState() {
+    super.initState();
+    _daysCtrl = TextEditingController(text: '90');
+  }
+
+  @override
+  void dispose() {
+    _daysCtrl.dispose();
+    super.dispose();
+  }
+
+  void _updateDays(int value) {
+    final clamped = value.clamp(1, 999);
+    setState(() {
+      _days = clamped;
+      _daysCtrl.text = '$clamped';
+      _daysCtrl.selection = TextSelection.collapsed(offset: '$clamped'.length);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -104,22 +142,64 @@ class _PageOne extends StatelessWidget {
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: AppSpacing.xl),
-          Text(
-            '90',
-            style: GoogleFonts.plusJakartaSans(
-              fontSize: 96,
-              fontWeight: FontWeight.w800,
-              letterSpacing: -3,
-              color: AppColors.textPrimary,
-            ),
+
+          // ── Editable number input ──────────
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              // Decrease
+              _RoundButton(
+                icon: Icons.remove,
+                onTap: _days > 1 ? () => _updateDays(_days - 1) : null,
+              ),
+              const SizedBox(width: AppSpacing.lg),
+
+              // Number field
+              SizedBox(
+                width: 140,
+                child: TextField(
+                  controller: _daysCtrl,
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.plusJakartaSans(
+                    fontSize: 72,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -2,
+                    color: AppColors.textPrimary,
+                  ),
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [
+                    FilteringTextInputFormatter.digitsOnly,
+                    _ClampFormatter(1, 999),
+                  ],
+                  onChanged: (val) {
+                    if (val.isNotEmpty) {
+                      _days = int.parse(val).clamp(1, 999);
+                    }
+                  },
+                  decoration: const InputDecoration(
+                    border: InputBorder.none,
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+              ),
+              const SizedBox(width: AppSpacing.lg),
+
+              // Increase
+              _RoundButton(
+                icon: Icons.add,
+                onTap: _days < 999 ? () => _updateDays(_days + 1) : null,
+              ),
+            ],
           ),
+
           Text('days', style: tt.titleMedium),
           const Spacer(flex: 3),
+
           SizedBox(
             width: double.infinity,
             height: 56,
             child: ElevatedButton(
-              onPressed: onNext,
+              onPressed: () => widget.onNext(_days),
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.accent,
                 foregroundColor: AppColors.surface,
@@ -144,6 +224,10 @@ class _PageOne extends StatelessWidget {
     );
   }
 }
+
+// ──────────────────────────────────────────────
+//  PAGE TWO — Sign-in
+// ──────────────────────────────────────────────
 
 class _PageTwo extends StatelessWidget {
   const _PageTwo({
@@ -217,6 +301,60 @@ class _PageTwo extends StatelessWidget {
           const SizedBox(height: AppSpacing.xxl),
         ],
       ),
+    );
+  }
+}
+
+// ──────────────────────────────────────────────
+//  HELPERS
+// ──────────────────────────────────────────────
+
+class _RoundButton extends StatelessWidget {
+  const _RoundButton({required this.icon, this.onTap});
+  final IconData icon;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = onTap != null;
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 48,
+        height: 48,
+        decoration: BoxDecoration(
+          color: AppColors.background,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppColors.border),
+        ),
+        alignment: Alignment.center,
+        child: Icon(
+          icon,
+          color: enabled ? AppColors.textPrimary : AppColors.textMuted,
+        ),
+      ),
+    );
+  }
+}
+
+/// Clamps input to [min]–[max].
+class _ClampFormatter extends TextInputFormatter {
+  _ClampFormatter(this.min, this.max);
+  final int min;
+  final int max;
+
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    if (newValue.text.isEmpty) return newValue;
+    final n = int.tryParse(newValue.text);
+    if (n == null) return oldValue;
+    final clamped = n.clamp(min, max);
+    return TextEditingValue(
+      text: '$clamped',
+      selection: TextSelection.collapsed(offset: '$clamped'.length),
     );
   }
 }

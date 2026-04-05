@@ -1,80 +1,100 @@
-import 'dart:async';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 
 import 'package:alpha/core/utils/date_utils.dart';
 import 'package:alpha/features/habit/domain/habit_model.dart';
 
-/// In-memory habit repository — swap for Firestore later.
+/// Firestore-backed habit repository with real-time streams.
 class HabitRepository {
   HabitRepository._();
   static final instance = HabitRepository._();
 
-  final Map<String, HabitModel> _store = {};
-  final _controller = StreamController<List<HabitModel>>.broadcast();
+  final _firestore = FirebaseFirestore.instance;
 
-  void _emit() {
-    final sorted = _store.values.toList()
-      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
-    _controller.add(sorted);
-  }
+  CollectionReference<Map<String, dynamic>> _habitsCol(String userId) =>
+      _firestore.collection('users').doc(userId).collection('habits');
 
-  /// Real-time stream of habits for [userId].
-  Stream<List<HabitModel>> watchHabits(String userId) async* {
-    // Emit current snapshot immediately.
-    final current = _store.values
-        .where((h) => h.userId == userId)
-        .toList()
-      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
-    yield current;
-    yield* _controller.stream
-        .map((all) => all.where((h) => h.userId == userId).toList());
+  /// Real-time stream of habits for [userId], ordered by createdAt desc.
+  Stream<List<HabitModel>> watchHabits(String userId) {
+    return _habitsCol(userId)
+        .orderBy('createdAt', descending: true)
+        .snapshots()
+        .map((snap) => snap.docs
+            .map((doc) => HabitModel.fromMap(doc.id, userId, doc.data()))
+            .toList());
   }
 
   Future<void> addHabit(HabitModel habit) async {
-    _store[habit.id] = habit;
-    _emit();
+    await _habitsCol(habit.userId).doc(habit.id).set(habit.toMap());
   }
 
   Future<void> updateHabit(HabitModel habit) async {
-    _store[habit.id] = habit;
-    _emit();
+    await _habitsCol(habit.userId).doc(habit.id).update(habit.toMap());
   }
 
-  Future<void> deleteHabit(String habitId) async {
-    _store.remove(habitId);
-    _emit();
+  Future<void> deleteHabit(String userId, String habitId) async {
+    await _habitsCol(userId).doc(habitId).delete();
   }
 
-  /// Toggles the completion for [habitId] on [dateKey].
-  /// Recalculates streaks after toggling.
-  Future<HabitModel?> toggleCompletion(String habitId, String dateKey) async {
-    final habit = _store[habitId];
-    if (habit == null) return null;
+  /// Toggle completion for [habitId] on [dateKey].
+  /// Validates the date is scheduled before toggling.
+  /// Returns the updated [HabitModel] with recalculated streak, or null on error.
+  Future<HabitModel?> toggleCompletion(
+    String userId,
+    String habitId,
+    String dateKey,
+  ) async {
+    final docRef = _habitsCol(userId).doc(habitId);
 
-    final log = Map<String, bool>.from(habit.completionLog);
-    final wasCompleted = log[dateKey] == true;
-    if (wasCompleted) {
-      log.remove(dateKey);
-    } else {
-      log[dateKey] = true;
+    try {
+      final snap = await docRef.get();
+      if (!snap.exists) return null;
+
+      final habit = HabitModel.fromMap(habitId, userId, snap.data()!);
+
+      // Validate schedule
+      final date = AppDateUtils.parseDateKey(dateKey);
+      if (!habit.isScheduledForDate(date)) return null;
+
+      // Toggle
+      final log = Map<String, bool>.from(habit.completionLog);
+      if (log[dateKey] == true) {
+        log.remove(dateKey);
+      } else {
+        log[dateKey] = true;
+      }
+
+      final updated = habit.copyWith(completionLog: log).recalculateStreak();
+      await docRef.update(updated.toMap());
+      return updated;
+    } catch (e) {
+      debugPrint('Error toggling habit: $e');
+      return null;
     }
-
-    final updated = habit.copyWith(completionLog: log).recalculateStreak();
-    _store[habitId] = updated;
-    _emit();
-    return updated;
   }
 
   /// Midnight streak reset — call on app launch.
+  /// Only resets if yesterday was **scheduled** but not completed.
   Future<void> checkAndResetStreaks(String userId) async {
+    final snap = await _habitsCol(userId).get();
     final yesterday = AppDateUtils.yesterdayKey;
-    for (final entry in _store.entries.toList()) {
-      final habit = entry.value;
-      if (habit.userId != userId) continue;
-      final completedYesterday = habit.completionLog[yesterday] == true;
-      if (!completedYesterday && habit.currentStreak > 0) {
-        _store[entry.key] = habit.copyWith(currentStreak: 0);
+    final yesterdayDate = AppDateUtils.stripTime(
+      DateTime.now().subtract(const Duration(days: 1)),
+    );
+    final batch = _firestore.batch();
+    bool hasChanges = false;
+
+    for (final doc in snap.docs) {
+      final habit = HabitModel.fromMap(doc.id, userId, doc.data());
+      final wasScheduled = habit.isScheduledForDate(yesterdayDate);
+      final completed = habit.completionLog[yesterday] == true;
+
+      if (wasScheduled && !completed && habit.currentStreak > 0) {
+        batch.update(doc.reference, {'currentStreak': 0});
+        hasChanges = true;
       }
     }
-    _emit();
+
+    if (hasChanges) await batch.commit();
   }
 }

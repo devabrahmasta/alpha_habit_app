@@ -1,26 +1,27 @@
-import 'dart:async';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'package:alpha/features/target/domain/target_model.dart';
 
-/// In-memory target repository — swap for Firestore later.
+/// Firestore-backed target repository.
 class TargetRepository {
   TargetRepository._();
   static final instance = TargetRepository._();
 
-  TargetModel? _target;
-  final _controller = StreamController<TargetModel?>.broadcast();
+  final _firestore = FirebaseFirestore.instance;
 
-  Stream<TargetModel?> watchTarget(String userId) async* {
-    yield _target;
-    yield* _controller.stream;
+  DocumentReference<Map<String, dynamic>> _targetDoc(String userId) =>
+      _firestore.collection('users').doc(userId).collection('target').doc('main');
+
+  /// Real-time stream of the user's target config.
+  Stream<TargetModel?> watchTarget(String userId) {
+    return _targetDoc(userId).snapshots().map((snap) {
+      if (!snap.exists || snap.data() == null) return null;
+      return TargetModel.fromMap(userId, snap.data()!);
+    });
   }
 
-  Future<void> createTarget(TargetModel target) async {
-    _target = target;
-    _controller.add(_target);
+  /// Creates or updates the target.
+  Future<void> createOrUpdateTarget(TargetModel target) async {
+    await _targetDoc(target.userId).set(target.toMap(), SetOptions(merge: true));
   }
-
-  TargetModel? get current => _target;
-
-  void dispose() => _controller.close();
 }

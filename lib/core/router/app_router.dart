@@ -6,32 +6,53 @@ import 'package:alpha/core/providers.dart';
 import 'package:alpha/features/habit/presentation/home_screen.dart';
 import 'package:alpha/features/onboarding/onboarding_screen.dart';
 
-/// The router provider — rebuilds when auth or onboarding state changes.
+/// A [ChangeNotifier] that fires whenever the auth or onboarding state changes.
+/// GoRouter listens to this and re-runs its redirect — without
+/// creating a new router instance.
+class _RouterNotifier extends ChangeNotifier {
+  _RouterNotifier(this._ref) {
+    _ref.listen(authStateProvider, (prev, next) => notifyListeners());
+    _ref.listen(onboardingCompleteProvider, (prev, next) => notifyListeners());
+  }
+
+  final Ref _ref;
+}
+
+final _routerNotifierProvider = Provider<_RouterNotifier>((ref) {
+  return _RouterNotifier(ref);
+});
+
+/// Single GoRouter instance — never recreated.
+/// Redirect is re-evaluated via [refreshListenable] when auth/onboarding changes.
 final routerProvider = Provider<GoRouter>((ref) {
-  final authState = ref.watch(authStateProvider);
-  final onboardingDone = ref.watch(onboardingCompleteProvider);
+  final notifier = ref.watch(_routerNotifierProvider);
 
   return GoRouter(
     initialLocation: '/',
+    refreshListenable: notifier,
     redirect: (context, state) {
-      final isOnboardingDone = onboardingDone.valueOrNull ?? false;
-      final isSignedIn = authState.valueOrNull != null;
+      final onboardingDone =
+          ref.read(onboardingCompleteProvider).valueOrNull ?? false;
+      final isSignedIn = ref.read(authStateProvider).valueOrNull != null;
       final loc = state.matchedLocation;
 
-      // Still loading
-      if (onboardingDone.isLoading || authState.isLoading) return null;
+      // Still loading — stay put
+      if (ref.read(onboardingCompleteProvider).isLoading ||
+          ref.read(authStateProvider).isLoading) {
+        return null;
+      }
 
       // Not onboarded → onboarding
-      if (!isOnboardingDone) {
+      if (!onboardingDone) {
         return loc == '/onboarding' ? null : '/onboarding';
       }
 
-      // Onboarded but not signed in → onboarding page 2 (sign in)
+      // Onboarded but not signed in → onboarding (page 2)
       if (!isSignedIn) {
         return loc == '/onboarding' ? null : '/onboarding';
       }
 
-      // Signed in at onboarding → go home
+      // Signed in + still on onboarding → go home
       if (loc == '/onboarding') return '/';
 
       return null;

@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:alpha/core/theme/app_colors.dart';
 import 'package:alpha/core/theme/app_theme.dart';
 import 'package:alpha/core/providers.dart';
+import 'package:alpha/core/utils/date_utils.dart';
 import 'package:alpha/features/habit/domain/habit_model.dart';
 import 'package:alpha/features/habit/presentation/widgets/contribution_grid.dart';
 
@@ -81,13 +82,25 @@ class _HabitDetailSheetState extends ConsumerState<HabitDetailSheet> {
       ),
     );
     if (confirmed == true && mounted) {
-      await ref.read(habitRepoProvider).deleteHabit(_habit.id);
+      await ref.read(habitRepoProvider).deleteHabit(_habit.userId, _habit.id);
       if (mounted) Navigator.pop(context);
     }
   }
 
   void _toggleDay(String dateKey) {
-    ref.read(habitRepoProvider).toggleCompletion(_habit.id, dateKey).then((h) {
+    // Validate schedule before toggling.
+    final date = AppDateUtils.parseDateKey(dateKey);
+    if (!_habit.isScheduledForDate(date)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Not scheduled for this date')),
+      );
+      return;
+    }
+
+    ref
+        .read(habitRepoProvider)
+        .toggleCompletion(_habit.userId, _habit.id, dateKey)
+        .then((h) {
       if (h != null && mounted) setState(() => _habit = h);
     });
   }
@@ -96,124 +109,127 @@ class _HabitDetailSheetState extends ConsumerState<HabitDetailSheet> {
   Widget build(BuildContext context) {
     final tt = Theme.of(context).textTheme;
 
-    return Container(
-      decoration: const BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.screenPadding),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const SizedBox(height: 12),
-            // Handle
-            Center(
-              child: Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: AppColors.border,
-                  borderRadius: BorderRadius.circular(2),
+    return SafeArea(
+      top: true,
+      child: Container(
+        decoration: const BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.screenPadding),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const SizedBox(height: 12),
+              // Handle
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: AppColors.border,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
                 ),
               ),
-            ),
-            const SizedBox(height: 24),
-
-            // Title + Edit button
-            Row(
-              children: [
-                Expanded(
-                  child: _editing
-                      ? TextField(
-                          controller: _nameCtrl,
-                          style: tt.headlineMedium,
-                          decoration: const InputDecoration(
-                            border: InputBorder.none,
-                            contentPadding: EdgeInsets.zero,
-                          ),
-                        )
-                      : Text(_habit.name, style: tt.headlineMedium),
-                ),
-                TextButton(
-                  onPressed: _editing ? _saveEdits : () => setState(() => _editing = true),
-                  child: Text(
-                    _editing ? 'Save' : 'Edit',
-                    style: tt.bodyMedium?.copyWith(
-                      color: AppColors.accent,
-                      fontWeight: FontWeight.w600,
+              const SizedBox(height: 24),
+      
+              // Title + Edit button
+              Row(
+                children: [
+                  Expanded(
+                    child: _editing
+                        ? TextField(
+                            controller: _nameCtrl,
+                            style: tt.headlineMedium,
+                            decoration: const InputDecoration(
+                              border: InputBorder.none,
+                              contentPadding: EdgeInsets.zero,
+                            ),
+                          )
+                        : Text(_habit.name, style: tt.headlineMedium),
+                  ),
+                  TextButton(
+                    onPressed: _editing ? _saveEdits : () => setState(() => _editing = true),
+                    child: Text(
+                      _editing ? 'Save' : 'Edit',
+                      style: tt.bodyMedium?.copyWith(
+                        color: AppColors.accent,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
-                ),
-              ],
-            ),
-
-            if (_editing)
-              GestureDetector(
-                onTap: () async {
-                  final picked = await showTimePicker(
-                    context: context,
-                    initialTime: _editTime ?? const TimeOfDay(hour: 20, minute: 0),
-                  );
-                  if (picked != null) setState(() => _editTime = picked);
-                },
-                child: Padding(
+                ],
+              ),
+      
+              if (_editing)
+                GestureDetector(
+                  onTap: () async {
+                    final picked = await showTimePicker(
+                      context: context,
+                      initialTime: _editTime ?? const TimeOfDay(hour: 20, minute: 0),
+                    );
+                    if (picked != null) setState(() => _editTime = picked);
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Row(
+                      children: [
+                        Icon(Icons.access_time_rounded, size: 16, color: AppColors.textSecondary),
+                        const SizedBox(width: 4),
+                        Text(
+                          _timeLabelString ?? 'Set time',
+                          style: tt.bodyMedium,
+                        ),
+                      ],
+                    ),
+                  ),
+                )
+              else if (_habit.timeLabel != null)
+                Padding(
                   padding: const EdgeInsets.only(top: 4),
-                  child: Row(
-                    children: [
-                      Icon(Icons.access_time_rounded, size: 16, color: AppColors.textSecondary),
-                      const SizedBox(width: 4),
-                      Text(
-                        _timeLabelString ?? 'Set time',
-                        style: tt.bodyMedium,
-                      ),
-                    ],
+                  child: Text(_habit.timeLabel!, style: tt.bodyMedium),
+                ),
+      
+              const SizedBox(height: AppSpacing.xl),
+      
+              // Streak info
+              Row(
+                children: [
+                  _StatChip(label: 'Current', value: '${_habit.currentStreak}'),
+                  const SizedBox(width: 12),
+                  _StatChip(label: 'Longest', value: '${_habit.longestStreak}'),
+                ],
+              ),
+              const SizedBox(height: AppSpacing.xl),
+      
+              // Grid label
+              Text('THIS MONTH', style: tt.labelSmall),
+              const SizedBox(height: AppSpacing.md),
+      
+              ContributionGrid(
+                completionLog: _habit.completionLog,
+                onDayToggled: _toggleDay,
+              ),
+      
+              const SizedBox(height: AppSpacing.xl),
+      
+              // Delete
+              Center(
+                child: TextButton(
+                  onPressed: _deleteHabit,
+                  child: Text(
+                    'Delete Habit',
+                    style: tt.bodySmall?.copyWith(color: AppColors.destructive),
                   ),
                 ),
-              )
-            else if (_habit.timeLabel != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Text(_habit.timeLabel!, style: tt.bodyMedium),
               ),
-
-            const SizedBox(height: AppSpacing.xl),
-
-            // Streak info
-            Row(
-              children: [
-                _StatChip(label: 'Current', value: '${_habit.currentStreak}'),
-                const SizedBox(width: 12),
-                _StatChip(label: 'Longest', value: '${_habit.longestStreak}'),
-              ],
-            ),
-            const SizedBox(height: AppSpacing.xl),
-
-            // Grid label
-            Text('THIS MONTH', style: tt.labelSmall),
-            const SizedBox(height: AppSpacing.md),
-
-            ContributionGrid(
-              completionLog: _habit.completionLog,
-              onDayToggled: _toggleDay,
-            ),
-
-            const SizedBox(height: AppSpacing.xl),
-
-            // Delete
-            Center(
-              child: TextButton(
-                onPressed: _deleteHabit,
-                child: Text(
-                  'Delete Habit',
-                  style: tt.bodySmall?.copyWith(color: AppColors.destructive),
-                ),
-              ),
-            ),
-
-            SizedBox(height: AppSpacing.lg + MediaQuery.of(context).padding.bottom),
-          ],
+      
+              SizedBox(height: AppSpacing.lg + MediaQuery.of(context).padding.bottom),
+            ],
+          ),
         ),
       ),
     );

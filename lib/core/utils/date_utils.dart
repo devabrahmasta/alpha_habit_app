@@ -32,4 +32,7 @@ abstract final class AppDateUtils {
 
   /// Strips time from a [DateTime], leaving only the date.
   static DateTime stripTime(DateTime dt) => DateTime(dt.year, dt.month, dt.day);
+
+  /// Parses a date key like `"2025-01-15"` back into a [DateTime].
+  static DateTime parseDateKey(String dateKey) => _keyFormat.parseStrict(dateKey);
 }

@@ -29,21 +29,42 @@ class HabitModel {
     this.completionLog = const {},
     this.repeatType = RepeatType.daily,
     this.repeatInterval = 1,
-    this.repeatWeekdays = const [1, 2, 3, 4, 5, 6, 0], // all days
+    this.repeatWeekdays = const [0, 1, 2, 3, 4, 5, 6], // all days
   });
 
   /// Whether this habit is completed for today.
   bool get isCompletedToday =>
       completionLog[AppDateUtils.todayKey] == true;
 
-  /// Human-readable repeat summary, e.g. "Every day", "Every 2 weeks · Mon, Wed, Fri".
+  /// Checks if this habit is **scheduled** for [date].
+  ///
+  /// - Daily: always scheduled
+  /// - Weekly: only on matching weekdays in [repeatWeekdays]
+  /// - Monthly: only on the same day-of-month as [createdAt]
+  bool isScheduledForDate(DateTime date) {
+    switch (repeatType) {
+      case RepeatType.daily:
+        return true;
+
+      case RepeatType.weekly:
+        // DateTime.weekday: 1=Mon … 7=Sun
+        // Our model:        0=Sun … 6=Sat
+        final normalized = date.weekday == 7 ? 0 : date.weekday;
+        return repeatWeekdays.contains(normalized);
+
+      case RepeatType.monthly:
+        return date.day == createdAt.day;
+    }
+  }
+
+  /// Human-readable repeat summary.
   String get repeatLabel {
     switch (repeatType) {
       case RepeatType.daily:
         if (repeatInterval == 1) return 'Every day';
         return 'Every $repeatInterval days';
       case RepeatType.weekly:
-        final dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+        const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
         final selected = repeatWeekdays.map((d) => dayNames[d]).join(', ');
         final prefix = repeatInterval == 1
             ? 'Every week'
@@ -83,20 +104,33 @@ class HabitModel {
     );
   }
 
-  /// Recalculates [currentStreak] and [longestStreak] from [completionLog].
+  /// Recalculates [currentStreak] and [longestStreak] from [completionLog],
+  /// **respecting the repeat schedule**.
+  ///
+  /// Walks backwards from today:
+  /// - Scheduled + completed → streak++
+  /// - Scheduled + NOT completed → BREAK
+  /// - Not scheduled → skip (don't break, don't increment)
   HabitModel recalculateStreak() {
     int streak = 0;
     DateTime day = AppDateUtils.stripTime(DateTime.now());
+    final earliest = AppDateUtils.stripTime(createdAt).subtract(const Duration(days: 1));
 
-    // Walk backwards from today counting consecutive completed days.
-    while (true) {
+    while (day.isAfter(earliest)) {
       final key = AppDateUtils.toDateKey(day);
-      if (completionLog[key] == true) {
-        streak++;
-        day = day.subtract(const Duration(days: 1));
-      } else {
-        break;
+      final scheduled = isScheduledForDate(day);
+      final completed = completionLog[key] == true;
+
+      if (scheduled) {
+        if (completed) {
+          streak++;
+        } else {
+          break; // scheduled but missed → streak broken
+        }
       }
+      // not scheduled → skip silently
+
+      day = day.subtract(const Duration(days: 1));
     }
 
     final newLongest = streak > longestStreak ? streak : longestStreak;
@@ -133,7 +167,7 @@ class HabitModel {
       ),
       repeatInterval: (m['repeatInterval'] as num?)?.toInt() ?? 1,
       repeatWeekdays: List<int>.from(
-        (m['repeatWeekdays'] as List<dynamic>?) ?? [1, 2, 3, 4, 5, 6, 0],
+        (m['repeatWeekdays'] as List<dynamic>?) ?? [0, 1, 2, 3, 4, 5, 6],
       ),
     );
   }

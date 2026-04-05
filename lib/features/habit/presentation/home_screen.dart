@@ -28,6 +28,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       vsync: this,
       duration: const Duration(milliseconds: 600),
     )..forward();
+
+    // Midnight streak reset check on app launch.
+    Future.microtask(() {
+      final user = ref.read(authStateProvider).valueOrNull;
+      if (user != null) {
+        ref.read(habitRepoProvider).checkAndResetStreaks(user.uid);
+      }
+    });
   }
 
   @override
@@ -38,7 +46,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
 
   void _toggleHabit(HabitModel habit) {
     final todayKey = AppDateUtils.todayKey;
-    ref.read(habitRepoProvider).toggleCompletion(habit.id, todayKey);
+    ref.read(habitRepoProvider).toggleCompletion(
+      habit.userId,
+      habit.id,
+      todayKey,
+    );
   }
 
   void _openAddSheet() {
@@ -68,6 +80,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
 
     return Scaffold(
       body: SafeArea(
+        top: true,
         child: habitsAsync.when(
           loading: () => const Center(child: CircularProgressIndicator()),
           error: (e, _) => Center(child: Text('Error: $e')),
